@@ -1,6 +1,0 @@
-name: astrbot_plugin_mslx
-desc: 对接 MSLX Minecraft 服务器管理面板，通过聊天指令远程管理 MC 服务器
-author: MSLTeam
-version: 1.0.0
-display_name: MSLX 服务器管理
-repo: ""
