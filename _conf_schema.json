@@ -1,0 +1,36 @@
+{
+  "mslx_url": {
+    "title": "MSLX 面板地址",
+    "description": "MSLX Daemon 的完整 URL，例如 http://127.0.0.1:1027",
+    "type": "string",
+    "default": "http://127.0.0.1:1027"
+  },
+  "auth_mode": {
+    "title": "认证方式",
+    "description": "选择 password（用户名+密码登录）或 apikey（API 密钥认证）",
+    "type": "string",
+    "enum": [
+      "password",
+      "apikey"
+    ],
+    "default": "password"
+  },
+  "username": {
+    "title": "登录用户名",
+    "description": "认证方式为 password 时使用",
+    "type": "string",
+    "default": "admin"
+  },
+  "password": {
+    "title": "登录密码",
+    "description": "认证方式为 password 时使用",
+    "type": "string",
+    "default": ""
+  },
+  "api_key": {
+    "title": "API Key",
+    "description": "认证方式为 apikey 时使用，可在 MSLX 面板设置中获取",
+    "type": "string",
+    "default": ""
+  }
+}
