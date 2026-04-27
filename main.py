@@ -900,7 +900,7 @@ class MSLXPlugin(star.Star):
             self._ensure_client()
             info_data = await self.client.get_update_info()
             if _rcode(info_data) != 200:
-                event.set_result(MessageEventResult().message(f"❌ 探针请求异常: {_rmsg(info_data)}"))
+                yield MessageEventResult().message(f"❌ 探针请求异常: {_rmsg(info_data)}")
                 return
                 
             info = _rdata(info_data) or {}
@@ -912,14 +912,13 @@ class MSLXPlugin(star.Star):
             
             if force == "yes":
                 if not need_update:
-                    event.set_result(MessageEventResult().message("当前已是最新或管理受控版本，无需强制更新。"))
+                    yield MessageEventResult().message("当前已是最新或管理受控版本，无需强制更新。")
                     return
-                # 下发指令执行更新
-                update_data = await self.client.update_daemon(True)
-                if _rcode(update_data) == 200:
-                    event.set_result(MessageEventResult().message("🔥 已向后端下发静默自解析更新指令！\n面板可能会出现短时间连接不上等重启中断想象，在此期间请勿强行操作服务器，稍作等待即自动完成。"))
-                else:
-                    event.set_result(MessageEventResult().message(f"❌ 更新发起失败：{_rmsg(update_data)}"))
+                # 下发指令执行更新并侦听后续进度播报
+                async for status in self.client.update_and_listen(True):
+                    yield MessageEventResult().message(status["message"])
+                    if status.get("type") in ("error", "completed", "done"):
+                        break
                 return
                 
             lines = ["♻️ 面板核心服务后台 (Daemon) 探测更新"]
@@ -935,11 +934,11 @@ class MSLXPlugin(star.Star):
             else:
                 lines.append("✅ 您当前的守护进程核心已经是最新版噜！继续畅玩吧。")
                 
-            event.set_result(MessageEventResult().message("\n".join(lines)))
+            yield MessageEventResult().message("\n".join(lines))
             
         except Exception as e:
             logger.error(f"mslx update error: {e}")
-            event.set_result(MessageEventResult().message(f"❌ 查询更新失败: {e}"))
+            yield MessageEventResult().message(f"❌ 查询更新失败: {e}")
             
     @filter.command("mslx java")
     @filter.permission_type(filter.PermissionType.ADMIN)

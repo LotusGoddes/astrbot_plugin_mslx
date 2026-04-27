@@ -245,6 +245,82 @@ class MSLXClient:
     async def update_daemon(self, auto_restart: bool = True) -> dict:
         return await self._post(f"/api/update?autoRestart={'true' if auto_restart else 'false'}")
 
+    async def update_and_listen(self, auto_restart: bool = True):
+        """下发面板升级请求并持续在 SignalR 信道上接收升级细则进度，遇到错误抛出。"""
+        await self._ensure_token()
+        hub_path = "/api/hubs/daemonUpdate"
+        auth_query = self._auth_query()
+        try:
+            async with aiohttp.ClientSession() as session:
+                # 1. 协商票据
+                negotiate_url = f"{self.base_url}{hub_path}/negotiate?negotiateVersion=1&{auth_query}"
+                async with session.post(negotiate_url, headers=self._headers(), timeout=10) as resp:
+                    if resp.status != 200:
+                        yield {"type": "error", "message": f"建立更新广播信道握手失败: HTTP {resp.status}"}
+                        return
+                    neg_data = await resp.json()
+
+                conn_token = neg_data.get("connectionToken", "")
+                if not conn_token:
+                    yield {"type": "error", "message": "无法从核心获取更新信道监听牌照"}
+                    return
+
+                # 2. 爬取 WebSocket 线
+                ws_scheme = "ws" if self.base_url.startswith("http://") else "wss"
+                base_host = self.base_url.replace("http://", "").replace("https://", "")
+                ws_url = f"{ws_scheme}://{base_host}{hub_path}?id={conn_token}&{auth_query}"
+
+                async with session.ws_connect(ws_url, timeout=10) as ws:
+                    handshake = json.dumps({"protocol": "json", "version": 1}) + SIGNALR_SEPARATOR
+                    await ws.send_str(handshake)
+
+                    hs_resp = await asyncio.wait_for(ws.receive(), timeout=5)
+                    hs_text = hs_resp.data if hasattr(hs_resp, 'data') else str(hs_resp)
+                    if isinstance(hs_text, str) and '"error"' in hs_text:
+                        yield {"type": "error", "message": f"更新信道权限被核心驳回: {hs_text}"}
+                        return
+
+                    # 3. 启动更新发信的背投微服务
+                    async def trigger_update():
+                        return await self.update_daemon(auto_restart)
+                    update_task = asyncio.create_task(trigger_update())
+
+                    deadline = time.time() + 300  # 五分钟兜底
+                    while time.time() < deadline:
+                        try:
+                            msg = await asyncio.wait_for(ws.receive(), timeout=15)
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                for part in msg.data.split(SIGNALR_SEPARATOR):
+                                    if not part.strip():
+                                        continue
+                                    try:
+                                        data = json.loads(part)
+                                    except Exception:
+                                        continue
+                                    
+                                    if data.get("type") == 1:
+                                        target = data.get("target")
+                                        args = data.get("arguments", [])
+                                        if target == "UpdateCompleted":
+                                            yield {"type": "completed", "message": "✅ 更新流程所有动作已完成，配置刷新成功，底层程序正在洗牌重生中！"}
+                                            return
+                                        elif target == "UpdateFailed" and len(args) >= 1:
+                                            yield {"type": "error", "message": f"❌ 面板内部抛出致命错误，更新夭折：{args[0]}"}
+                                            return
+                                    elif data.get("type") == 6:
+                                        await ws.send_str(json.dumps({"type": 6}) + SIGNALR_SEPARATOR)
+                            elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                                yield {"type": "done", "message": "⚠️ 信道与核心已经失联！这往往说明更新覆盖已经完成，核心被强制退出了。"}
+                                break
+                        except asyncio.TimeoutError:
+                            if update_task.done():
+                                res = update_task.result()
+                                if res and res.get("code") not in (200, None):
+                                    yield {"type": "error", "message": f"更新命令甚至未进入处理流就被弹回：{res.get('message')}"}
+                                    return
+        except Exception as e:
+            yield {"type": "error", "message": f"捕获底层隧道崩溃异常: {e}"}
+
     async def get_java_list(self, refresh: bool = False) -> dict:
         return await self._get(f"/api/java/list?refresh={'true' if refresh else 'false'}")
 
